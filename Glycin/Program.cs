@@ -85,31 +85,31 @@ internal static class Program
         );
     }
 
-    private static byte[] ReconstructData(ReadOnlySpan<byte> encryptedData, List<DecryptionSegment> segs)
+    private static byte[] ReconstructData(ReadOnlySpan<byte> encryptedData, List<DecryptionVector> vecs)
     {
         var outBytes = encryptedData.ToArray();
         var outSpan = outBytes.AsSpan();
 
-        /* var nSeg = segments[0]; // this is irrelevant right now - global-metadata.dat string */
-        var hSeg = segs[1];
-        if (hSeg.LengthKind != SegmentLengthKind.ImmConstant)
-            throw new InvalidDataException("expected seg 0x1 to be constant.");
+        /* var nVec = vecs[0]; // this is irrelevant right now - global-metadata.dat string */
+        var hVec = vecs[1];
+        if (hVec.LengthKind != VectorLengthKind.ImmConstant)
+            throw new InvalidDataException("expected vec 0x1 to be constant.");
 
-        var hSize = hSeg.LengthOrFieldOffset;
+        var hSize = hVec.LengthOrFieldOffset;
         var hSpan = outSpan[..hSize];
         Xorshift64.Decrypt(
             hSpan,
-            hSeg.Seed,
-            hSeg.SBox
+            hVec.Seed,
+            hVec.SBox
         );
 
-        for (var i = 2; i < segs.Count; i++)
+        for (var i = 2; i < vecs.Count; i++)
         {
-            var seg = segs[i];
+            var vec = vecs[i];
 
-            if (seg.LengthKind != SegmentLengthKind.Calculated)
+            if (vec.LengthKind != VectorLengthKind.Calculated)
             {
-                Log.Warn($"the fuck? seg 0x{i:X} should be an offset into the file. but wasn't. skipped.");
+                Log.Warn($"the fuck? vec 0x{i:X} should be an offset into the file. but wasn't. skipped.");
                 continue;
             }
 
@@ -121,10 +121,9 @@ internal static class Program
              **/
             bool InBounds()
             {
-                if (seg.LengthOrFieldOffset + 4 > hSize)
+                if (vec.LengthOrFieldOffset + 4 > hSize)
                 {
-                    Log.Warn(
-                        $"seg 0x{i:X} field offset out of bounds: ({seg.LengthOrFieldOffset:X8} + 4) > {hSize:X8}.");
+                    Log.Warn($"vec 0x{i:X} field offset out of bounds: ({vec.LengthOrFieldOffset:X8} + 4) > {hSize:X8}.");
                     return false;
                 }
 
@@ -136,13 +135,13 @@ internal static class Program
                 continue;
             }
 
-            var segSize = BinaryPrimitives.ReadInt32LittleEndian(
-                hSpan.Slice(seg.LengthOrFieldOffset, 4)
+            var vecLen = BinaryPrimitives.ReadInt32LittleEndian(
+                hSpan.Slice(vec.LengthOrFieldOffset, 4)
             );
 
-            if (segSize == 0)
+            if (vecLen == 0)
             {
-                Log.Warn($"seg 0x{i:X} is empty for some reason. moving on...");
+                Log.Warn($"vec 0x{i:X} is empty for some reason. moving on...");
                 continue;
             }
 
@@ -152,24 +151,24 @@ internal static class Program
             }
 
             var rawOffset = BinaryPrimitives.ReadInt32LittleEndian(
-                hSpan.Slice(seg.HeaderOffsetField, 4)
+                hSpan.Slice(vec.HeaderOffsetField, 4)
             );
 
-            /* wtf??? some segments end up out of bounds unless... mod arith..? */
-            var tgtOffset = (int)((uint)rawOffset + (uint)seg.OffsetBaseDelta);
-            if (tgtOffset < 0 || tgtOffset + segSize > outSpan.Length)
+            /* wtf??? some vectors end up out of bounds unless... mod arith..? */
+            var tgtOffset = (int)((uint)rawOffset + (uint)vec.OffsetBaseDelta);
+            if (tgtOffset < 0 || tgtOffset + vecLen > outSpan.Length)
             {
-                Log.Warn($"seg 0x{i:X} out of bounds: (0x{tgtOffset:X8} + 0x{segSize:X8}) > ({outSpan.Length:X8}). skipped.");
+                Log.Warn($"vec 0x{i:X} out of bounds: (0x{tgtOffset:X8} + 0x{vecLen:X8}) > ({outSpan.Length:X8}). skipped.");
                 continue;
             }
 
             Xorshift64.Decrypt(
-                outSpan.Slice(tgtOffset, segSize),
-                seg.Seed,
-                seg.SBox
+                outSpan.Slice(tgtOffset, vecLen),
+                vec.Seed,
+                vec.SBox
             );
 
-            Log.Info($"seg 0x{i:X}: ok");
+            Log.Info($"vec 0x{i:X}: ok");
         }
 
         return outBytes;
@@ -203,24 +202,24 @@ internal static class Program
         }
 
         Log.Info("here goes... scanning for decryption vectors.");
-        var segments = new VectorScanner(elfInfo).Scan(insns);
+        var vecs = new VectorScanner(elfInfo).Scan(insns);
 
-        Log.Info($"found {segments.Count} decryption segments.");
-        foreach (var segment in segments)
-        {
-            Console.WriteLine(segment);
-        }
+        Log.Info($"found {vecs.Count} decryption vectors.");
+        // foreach (var vec in vecs)
+        // {
+        //     Console.WriteLine(vec);
+        // }
 
         Log.Info("generating c# utility class...");
         WriteTextFile(
             "Glycin.Vectors.g.cs",
-            () => CodeGen.GenerateDecryptionConfigClass(segments, "GlycinVectors")
+            () => CodeGen.GenerateDecryptionConfigClass(vecs, "GlycinVectors")
         );
 
         Log.Info("generating json config...");
         WriteTextFile(
             "glycin.vectors.json",
-            () => JsonSerializer.Serialize(segments, new JsonSerializerOptions
+            () => JsonSerializer.Serialize(vecs, new JsonSerializerOptions
             {
                 WriteIndented = true,
                 IndentSize = 2
@@ -228,31 +227,36 @@ internal static class Program
         );
 
         var absPath = Path.GetFullPath(filePath);
-        var globalMetadataPath = Path.Combine(
-            Path.GetDirectoryName(absPath)!,
-            "CarX Street_Data",
-            "il2cpp_data",
-            "Metadata",
-            "global-metadata.dat"
-        );
+        var dirs = Directory.GetDirectories(Path.GetDirectoryName(absPath)!);
+        var tgtDir = dirs.FirstOrDefault(x => x.EndsWith("_Data"));
 
-        if (File.Exists(globalMetadataPath))
+        if (tgtDir != null)
         {
-            Log.Info("found global metadata file near the game assembly. attempting decryption...");
-            try
+            var globalMetadataPath = Path.Combine(
+                tgtDir,
+                "il2cpp_data",
+                "Metadata",
+                "global-metadata.dat"
+            );
+
+            if (File.Exists(globalMetadataPath))
             {
-                WriteBinaryFile(
-                    "global-metadata-decrypted.dat",
-                    () => ReconstructData(
-                        File.ReadAllBytes(globalMetadataPath),
-                        segments
-                    )
-                );
-            }
-            catch (Exception e)
-            {
-                Log.Error("lol. failed.");
-                Console.WriteLine(e);
+                Log.Info("found global metadata file near the game assembly. attempting decryption...");
+                try
+                {
+                    WriteBinaryFile(
+                        "global-metadata-decrypted.dat",
+                        () => ReconstructData(
+                            File.ReadAllBytes(globalMetadataPath),
+                            vecs
+                        )
+                    );
+                }
+                catch (Exception e)
+                {
+                    Log.Error("lol. failed.");
+                    Console.WriteLine(e);
+                }
             }
         }
 

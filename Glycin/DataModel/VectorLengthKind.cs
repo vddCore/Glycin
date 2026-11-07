@@ -1,6 +1,6 @@
 namespace Glycin.DataModel;
 
-public enum SegmentLengthKind
+public enum VectorLengthKind
 {
     ImmConstant,
     Calculated

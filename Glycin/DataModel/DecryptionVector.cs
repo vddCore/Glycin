@@ -3,12 +3,12 @@ namespace Glycin.DataModel;
 using System.Text;
 using System.Text.Json.Serialization;
 
-public record DecryptionSegment(
+public record DecryptionVector(
     [property:JsonPropertyName("loop_addr")] ulong LoopAddress,
     [property:JsonPropertyName("seed")] ulong Seed,
     [property:JsonPropertyName("sbox_addr")] ulong SBoxAddr,
     [property:JsonPropertyName("sbox")] byte[] SBox,
-    [property:JsonPropertyName("length_kind")] SegmentLengthKind LengthKind,
+    [property:JsonPropertyName("length_kind")] VectorLengthKind LengthKind,
     [property:JsonPropertyName("length_or_fieldoffset")] int LengthOrFieldOffset,
     [property:JsonPropertyName("header_offset_field")] int HeaderOffsetField,
     [property:JsonPropertyName("offset_base_delta")] int OffsetBaseDelta
@@ -41,10 +41,10 @@ public record DecryptionSegment(
     {
         var sb = new StringBuilder();
 
-        sb.AppendLine($"[Segment @ 0x{LoopAddress:X8}] {{");
+        sb.AppendLine($"[Vector @ 0x{LoopAddress:X8}] {{");
         sb.AppendLine($"  Seed       : 0x{Seed:X16}");
 
-        if (LengthKind == SegmentLengthKind.ImmConstant)
+        if (LengthKind == VectorLengthKind.ImmConstant)
         {
             sb.AppendLine($"  Length     : 0x{LengthOrFieldOffset:X} ({LengthOrFieldOffset} bytes, Immediate)");
         }

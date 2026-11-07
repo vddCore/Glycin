@@ -14,10 +14,10 @@ public class VectorScanner
         _elfInfo = elfInfo;
     }
 
-    public List<DecryptionSegment> Scan(List<Instruction> insns)
+    public List<DecryptionVector> Scan(List<Instruction> insns)
     {
         /* this is not magic. it's arbitrary. */
-        var segments = new List<DecryptionSegment>();
+        var vectors = new List<DecryptionVector>();
         var sboxVa = 0ul;
 
         for (int i = 0; i < insns.Count - 8; i++)
@@ -37,7 +37,7 @@ public class VectorScanner
             {
                 var loopAddr = insn.IP;
                 var seed = 0ul;
-                var lengthKind = SegmentLengthKind.ImmConstant; /* first one is always constant as per malloc. so far. */
+                var lengthKind = VectorLengthKind.ImmConstant; /* first one is always constant as per malloc. so far. */
                 var lengthOrFieldOffset = 0;
                 var headerOffsetField = -1;
                 var offsetBaseDelta = 0;
@@ -54,16 +54,16 @@ public class VectorScanner
                         seed = prev.GetImmediate(1);
                     }
 
-                    if (lengthKind != SegmentLengthKind.Calculated
+                    if (lengthKind != VectorLengthKind.Calculated
                         && prev.Mnemonic == Mnemonic.Movsxd
                         && prev.Op0Register == Register.RBP
                         && prev.MemoryBase == Register.R13)
                     {
-                        lengthKind = SegmentLengthKind.Calculated;
+                        lengthKind = VectorLengthKind.Calculated;
                         lengthOrFieldOffset = (int)prev.MemoryDisplacement32;
                     }
 
-                    if (lengthKind == SegmentLengthKind.ImmConstant
+                    if (lengthKind == VectorLengthKind.ImmConstant
                         && lengthOrFieldOffset == 0
                         && prev.Mnemonic == Mnemonic.Mov
                         && prev.Op0Register == Register.EDI
@@ -125,7 +125,7 @@ public class VectorScanner
                                 Op1Kind: OpKind.Immediate8 or OpKind.Immediate32to64
                             })
                         {
-                            lengthKind = SegmentLengthKind.ImmConstant;
+                            lengthKind = VectorLengthKind.ImmConstant;
                             lengthOrFieldOffset = (int)nxt.GetImmediate(1);
                             break;
                         }
@@ -146,7 +146,7 @@ public class VectorScanner
                     );
                 }
 
-                segments.Add(new(
+                vectors.Add(new(
                     loopAddr,
                     seed,
                     sboxVa,
@@ -159,7 +159,7 @@ public class VectorScanner
             }
         }
 
-        return segments;
+        return vectors;
     }
     
     private static bool IsXorShift64Core(List<Instruction> insns, int index, out Register prngReg)

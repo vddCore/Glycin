@@ -6,7 +6,7 @@ using Glycin.DataModel;
 internal static class CodeGen
 {
     public static string GenerateDecryptionConfigClass(
-        IReadOnlyList<DecryptionSegment> segments,
+        IReadOnlyList<DecryptionVector> vectors,
         string className = "MetadataDecryptionConfig",
         string namespaceName = "Glycin.Generated")
     {
@@ -29,27 +29,27 @@ internal static class CodeGen
         sb.AppendLine("    #region S-box");
         sb.AppendLine();
 
-        foreach (var seg in segments)
+        foreach (var vec in vectors)
         {
-            if (uniqueTables.ContainsKey(seg.SBoxAddr) || seg.SBox is not { Length: > 0 })
+            if (uniqueTables.ContainsKey(vec.SBoxAddr) || vec.SBox is not { Length: > 0 })
             {
                 continue;
             }
 
-            var fieldName = $"SBox_{seg.SBoxAddr:X8}";
-            uniqueTables[seg.SBoxAddr] = fieldName;
+            var fieldName = $"SBox_{vec.SBoxAddr:X8}";
+            uniqueTables[vec.SBoxAddr] = fieldName;
 
-            sb.AppendLine($"    /// <summary>VA 0x{seg.SBoxAddr:X8} ({seg.SBox.Length}B)</summary>");
+            sb.AppendLine($"    /// <summary>VA 0x{vec.SBoxAddr:X8} ({vec.SBox.Length}B)</summary>");
             sb.AppendLine($"    public static readonly byte[] {fieldName} = new byte[]");
             sb.AppendLine("    {");
 
-            for (var i = 0; i < seg.SBox.Length; i += 16)
+            for (var i = 0; i < vec.SBox.Length; i += 16)
             {
-                var sliceLen = Math.Min(16, seg.SBox.Length - i);
+                var sliceLen = Math.Min(16, vec.SBox.Length - i);
                 sb.Append("        ");
                 for (var j = 0; j < sliceLen; j++)
                 {
-                    sb.Append($"0x{seg.SBox[i + j]:X2}, ");
+                    sb.Append($"0x{vec.SBox[i + j]:X2}, ");
                 }
 
                 sb.AppendLine();
@@ -62,47 +62,47 @@ internal static class CodeGen
         sb.AppendLine("    #endregion");
         sb.AppendLine();
 
-        sb.AppendLine("    public enum SegmentLengthKind");
+        sb.AppendLine("    public enum VectorLengthKind");
         sb.AppendLine("    {");
         sb.AppendLine("        ImmConstant,");
         sb.AppendLine("        Calculated");
         sb.AppendLine("    }");
         sb.AppendLine();
-        sb.AppendLine("    public readonly record struct SegmentConfig(");
+        sb.AppendLine("    public readonly record struct VectorConfig(");
         sb.AppendLine("        int Index,");
         sb.AppendLine("        ulong LoopAddress,");
         sb.AppendLine("        ulong Seed,");
         sb.AppendLine("        byte[] SBox,");
-        sb.AppendLine("        SegmentLengthKind LengthKind,");
+        sb.AppendLine("        VectorLengthKind LengthKind,");
         sb.AppendLine("        int LengthOrFieldOffset,");
         sb.AppendLine("        int HeaderOffsetField,");
         sb.AppendLine("        int OffsetBaseDelta");
         sb.AppendLine("    );");
         sb.AppendLine();
 
-        sb.AppendLine("    #region Decryption Segments");
+        sb.AppendLine("    #region Decryption Vectors");
         sb.AppendLine();
-        sb.AppendLine("    public static readonly SegmentConfig[] Segments = new SegmentConfig[]");
+        sb.AppendLine("    public static readonly VectorConfig[] Vectors = new VectorConfig[]");
         sb.AppendLine("    {");
 
-        for (var i = 0; i < segments.Count; i++)
+        for (var i = 0; i < vectors.Count; i++)
         {
-            var seg = segments[i];
-            var sboxRef = uniqueTables.GetValueOrDefault(seg.SBoxAddr, "Array.Empty<byte>()");
-            var lengthKind = seg.LengthKind == SegmentLengthKind.ImmConstant
-                ? "SegmentLengthKind.ImmConstant"
-                : "SegmentLengthKind.Calculated";
+            var vec = vectors[i];
+            var sboxRef = uniqueTables.GetValueOrDefault(vec.SBoxAddr, "Array.Empty<byte>()");
+            var lengthKind = vec.LengthKind == VectorLengthKind.ImmConstant
+                ? "VectorLengthKind.ImmConstant"
+                : "VectorLengthKind.Calculated";
 
-            sb.AppendLine($"        // seg {i + 1}: loop 0x{seg.LoopAddress:X8}");
+            sb.AppendLine($"        // vec {i + 1}: loop 0x{vec.LoopAddress:X8}");
             sb.AppendLine("        new(");
             sb.AppendLine($"            Index: {i + 1},");
-            sb.AppendLine($"            LoopAddress: 0x{seg.LoopAddress:X8}UL,");
-            sb.AppendLine($"            Seed: 0x{seg.Seed:X16}UL,");
+            sb.AppendLine($"            LoopAddress: 0x{vec.LoopAddress:X8}UL,");
+            sb.AppendLine($"            Seed: 0x{vec.Seed:X16}UL,");
             sb.AppendLine($"            SBox: {sboxRef},");
             sb.AppendLine($"            LengthKind: {lengthKind},");
-            sb.AppendLine($"            LengthOrFieldOffset: 0x{seg.LengthOrFieldOffset:X},");
-            sb.AppendLine($"            HeaderOffsetField: 0x{seg.HeaderOffsetField:X},");
-            sb.AppendLine($"            OffsetBaseDelta: 0x{seg.OffsetBaseDelta:X}");
+            sb.AppendLine($"            LengthOrFieldOffset: 0x{vec.LengthOrFieldOffset:X},");
+            sb.AppendLine($"            HeaderOffsetField: 0x{vec.HeaderOffsetField:X},");
+            sb.AppendLine($"            OffsetBaseDelta: 0x{vec.OffsetBaseDelta:X}");
             sb.AppendLine("        ),");
         }
 
