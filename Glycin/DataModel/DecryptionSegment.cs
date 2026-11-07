@@ -1,16 +1,17 @@
 namespace Glycin.DataModel;
 
 using System.Text;
+using System.Text.Json.Serialization;
 
 public record DecryptionSegment(
-    ulong LoopAddress,
-    ulong Seed,
-    ulong SBoxAddr,
-    byte[] SBox,
-    SegmentLengthKind LengthKind,
-    int LengthOrFieldOffset,
-    int HeaderOffsetField,
-    int OffsetBaseDelta
+    [property:JsonPropertyName("loop_addr")] ulong LoopAddress,
+    [property:JsonPropertyName("seed")] ulong Seed,
+    [property:JsonPropertyName("sbox_addr")] ulong SBoxAddr,
+    [property:JsonPropertyName("sbox")] byte[] SBox,
+    [property:JsonPropertyName("length_kind")] SegmentLengthKind LengthKind,
+    [property:JsonPropertyName("length_or_fieldoffset")] int LengthOrFieldOffset,
+    [property:JsonPropertyName("header_offset_field")] int HeaderOffsetField,
+    [property:JsonPropertyName("offset_base_delta")] int OffsetBaseDelta
 )
 {
     private static bool IsValidPermutation(ReadOnlySpan<byte> tbl)
