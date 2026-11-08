@@ -8,16 +8,11 @@ public sealed class Xorshift64
 
         for (var i = 0; i < data.Length; i++)
         {
-            state = state << 0x0D ^ state;
-            var extra = state >> 0x07 ^ state;
-            state = extra << 0x11 ^ extra;
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
 
-            uint a = (uint)(state >> 0x18 & 0xFF);
-            uint b = (uint)(state >> 0x10 & 0xFFFF);
-            uint c = (uint)extra;
-            uint d = (uint)(state >> 8) & 0xFFFFFF;
-
-            var sboxIndex =(byte)((a ^ b ^ c ^ d) & 0xFF);
+            byte sboxIndex = (byte)((state >> 24) ^ (state >> 16) ^ (state >> 8) ^ state);
             data[i] ^= sbox[sboxIndex];
         }
     }

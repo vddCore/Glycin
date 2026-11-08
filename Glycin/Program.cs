@@ -18,6 +18,8 @@ using Glycin.Analysis;
 using Glycin.Cryptography;
 using Glycin.DataModel;
 using Iced.Intel;
+using PeNet;
+using PeNet.Header.Pe;
 using Decoder = Iced.Intel.Decoder;
 
 internal static class Program
@@ -31,7 +33,69 @@ internal static class Program
         }
     }
 
-    private static ElfInfo LoadElf(string filePath)
+    private static ExecutableInfo LoadPE(string filePath)
+    {
+        var rawBytes = File.ReadAllBytes(filePath);
+        var pe = new PeFile(rawBytes);
+
+        var sections = pe.ImageSectionHeaders;
+        TerminateIf(
+            () => sections == null || sections.Length == 0,
+            "specified image has no section headers."
+        );
+
+        var optHeader = pe.ImageNtHeaders?.OptionalHeader;
+        TerminateIf(
+            () => optHeader == null,
+            "specified image is missing an optional header."
+        );
+
+        ulong imageBase = optHeader!.ImageBase;
+
+        var textHeader = sections!.FirstOrDefault(s => CleanSectionName(s.Name) == ".text");
+        TerminateIf(
+            () => textHeader == null,
+            "missing .text section in the specified image."
+        );
+
+        var rdataHeader = sections!.FirstOrDefault(s => CleanSectionName(s.Name) == ".rdata");
+        TerminateIf(
+            () => rdataHeader == null,
+            "missing .rdata section in the specified image."
+        );
+
+        var textBytes = ExtractSectionBytes(textHeader!);
+        ulong textBase = imageBase + textHeader!.VirtualAddress;
+
+        var rdataBytes = ExtractSectionBytes(rdataHeader!);
+        ulong rdataBase = imageBase + rdataHeader!.VirtualAddress;
+        ulong rdataEnd = rdataBase + rdataHeader.VirtualSize;
+
+        return new(
+            textBytes,
+            textBase,
+            rdataBytes,
+            rdataBase,
+            rdataEnd,
+            imageBase
+        );
+
+        byte[] ExtractSectionBytes(ImageSectionHeader header)
+        {
+            var offset = (int)header.PointerToRawData;
+            var size = (int)Math.Min(header.SizeOfRawData,
+                header.VirtualSize != 0 ? header.VirtualSize : header.SizeOfRawData);
+
+            var buffer = new byte[size];
+            Array.Copy(rawBytes, offset, buffer, 0, size);
+            return buffer;
+        }
+
+        static string CleanSectionName(string? rawName) =>
+            rawName?.TrimEnd('\0', ' ') ?? string.Empty;
+    }
+
+    private static ExecutableInfo LoadELF(string filePath)
     {
         using var elf = ELFReader.Load(filePath);
         var sections = elf.GetSections<Section<ulong>>().ToArray();
@@ -63,6 +127,27 @@ internal static class Program
             rodataEnd
         );
     }
+    
+    private static bool IsPE(string filePath)
+    {
+        using var fs = new FileStream(
+            filePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read
+        );
+        
+        if (fs.Length < 2)
+        {
+            return false;
+        }
+        
+        Span<byte> magic = stackalloc byte[2];
+        fs.ReadExactly(magic);
+        
+        return magic[0] == 0x4D 
+            && magic[1] == 0x5A;
+    }
 
     private static string MakeOutPath(string fileName) => Path.Combine(
         $"{Environment.CurrentDirectory}",
@@ -85,15 +170,47 @@ internal static class Program
         );
     }
 
+    private static readonly List<PointOfInterest> _pointsOfInterest =
+    [
+        new("assembliesCount", (0x80 + 0), 4),
+        new("assembliesCount", (0x80 + 0), 4),
+        new("imagesCount", (0x248 + 0), 4)
+    ];
+
+    private static void PrintPOIs(Span<byte> hSpan)
+    {
+        foreach (var poi in _pointsOfInterest)
+        {
+            var value = BinaryPrimitives.ReadInt32LittleEndian(
+                hSpan.Slice(
+                    poi.OffsetInHeader,
+                    poi.Size
+                )
+            );
+
+            Log.Info($"{poi}: {value:X16} ({value})");
+        }
+    }
+
     private static byte[] ReconstructData(ReadOnlySpan<byte> encryptedData, List<DecryptionVector> vecs)
     {
         var outBytes = encryptedData.ToArray();
         var outSpan = outBytes.AsSpan();
 
-        /* var nVec = vecs[0]; // this is irrelevant right now - global-metadata.dat string */
-        var hVec = vecs[1];
+        /* we're analyzing elf and first loop decrypts global-metadata.dat. delete that shit. */
+        if (vecs.Count > 0 
+            && vecs[0].LengthKind == VectorLengthKind.ImmConstant 
+            && vecs[0].LengthOrFieldOffset <= 32)
+        {
+            vecs.RemoveAt(0);
+        }
+        
+        if (vecs.Count == 0)
+            throw new InvalidDataException("no decryption vectors detected.");
+        
+        var hVec = vecs[0];
         if (hVec.LengthKind != VectorLengthKind.ImmConstant)
-            throw new InvalidDataException("expected vec 0x1 to be constant.");
+            throw new InvalidDataException("expected first vec to be constant.");
 
         var hSize = hVec.LengthOrFieldOffset;
         var hSpan = outSpan[..hSize];
@@ -103,7 +220,9 @@ internal static class Program
             hVec.SBox
         );
 
-        for (var i = 2; i < vecs.Count; i++)
+        // PrintPOIs(hSpan);
+
+        for (var i = 1; i < vecs.Count; i++)
         {
             var vec = vecs[i];
 
@@ -123,7 +242,8 @@ internal static class Program
             {
                 if (vec.LengthOrFieldOffset + 4 > hSize)
                 {
-                    Log.Warn($"vec 0x{i:X} field offset out of bounds: ({vec.LengthOrFieldOffset:X8} + 4) > {hSize:X8}.");
+                    Log.Warn(
+                        $"vec 0x{i:X} field offset out of bounds: ({vec.LengthOrFieldOffset:X8} + 4) > {hSize:X8}.");
                     return false;
                 }
 
@@ -158,7 +278,8 @@ internal static class Program
             var tgtOffset = (int)((uint)rawOffset + (uint)vec.OffsetBaseDelta);
             if (tgtOffset < 0 || tgtOffset + vecLen > outSpan.Length)
             {
-                Log.Warn($"vec 0x{i:X} out of bounds: (0x{tgtOffset:X8} + 0x{vecLen:X8}) > ({outSpan.Length:X8}). skipped.");
+                Log.Warn(
+                    $"vec 0x{i:X} out of bounds: (0x{tgtOffset:X8} + 0x{vecLen:X8}) > ({outSpan.Length:X8}). skipped.");
                 continue;
             }
 
@@ -187,11 +308,32 @@ internal static class Program
             $"file not found: {filePath}"
         );
 
-        var elfInfo = LoadElf(filePath);
+        ExecutableInfo execInfo;
+        VectorScanner vectorScanner;
+        if (IsPE(filePath))
+        {
+            Log.Info(
+                "seems to be a pe image... " +
+                "let's see how it goes."
+            );
+            
+            execInfo = LoadPE(filePath);
+            vectorScanner = new PeVectorScanner(execInfo);
+        }
+        else
+        {
+            Log.Info(
+                "seems to be an elf image... " +
+                "you better not be on mac os because i have ptsd related to that platform."
+            );
 
-        var codeReader = new ByteArrayCodeReader(elfInfo.Text);
+            execInfo = LoadELF(filePath);
+            vectorScanner = new ElfVectorScanner(execInfo);
+        }
+        
+        var codeReader = new ByteArrayCodeReader(execInfo.Text);
         var decoder = Decoder.Create(64, codeReader);
-        decoder.IP = elfInfo.TextBaseAddress;
+        decoder.IP = execInfo.TextBaseAddress;
 
         Log.Info("decoding... might take a while.");
         var insns = new List<Instruction>();
@@ -202,13 +344,13 @@ internal static class Program
         }
 
         Log.Info("here goes... scanning for decryption vectors.");
-        var vecs = new VectorScanner(elfInfo).Scan(insns);
+        var vecs = vectorScanner.Scan(insns);
 
         Log.Info($"found {vecs.Count} decryption vectors.");
-        // foreach (var vec in vecs)
-        // {
-        //     Console.WriteLine(vec);
-        // }
+        foreach (var vec in vecs)
+        {
+            Console.WriteLine(vec);
+        }
 
         Log.Info("generating c# utility class...");
         WriteTextFile(

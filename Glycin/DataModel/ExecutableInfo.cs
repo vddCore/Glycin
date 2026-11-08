@@ -1,9 +1,10 @@
 namespace Glycin.DataModel;
 
-public record ElfInfo(
+public record ExecutableInfo(
     byte[] Text,
     ulong TextBaseAddress,
     byte[] Rodata,
     ulong RodataBaseAddress,
-    ulong RodataEndAddress
+    ulong RodataEndAddress,
+    ulong ImageBase = 0
 );
